@@ -784,7 +784,17 @@ async def _send_telegram(token, chat_id, message, media_files=None, thread_id=No
                 formatted = message
             send_parse_mode = ParseMode.MARKDOWN_V2
 
-        bot = Bot(token=token)
+        # Respect TELEGRAM_PROXY env var (e.g. for VPS in regions where
+        # api.telegram.org is blocked) — same proxy the gateway adapter
+        # uses for inbound polling. Without this, the standalone fallback
+        # path (used by out-of-process callers like the WebUI agent) hits
+        # api.telegram.org directly and times out.
+        _telegram_proxy = os.getenv("TELEGRAM_PROXY", "").strip()
+        if _telegram_proxy:
+            from telegram.request import HTTPXRequest
+            bot = Bot(token=token, request=HTTPXRequest(proxy=_telegram_proxy))
+        else:
+            bot = Bot(token=token)
         int_chat_id = int(chat_id)
         media_files = media_files or []
         thread_kwargs = {}

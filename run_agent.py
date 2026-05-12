@@ -2191,6 +2191,13 @@ class AIAgent:
             if not isinstance(_custom_providers, list):
                 _custom_providers = []
 
+        # Store for reuse in _check_compression_model_feasibility (and any
+        # other method that needs to resolve aux model context via
+        # custom_providers).  Without this, get_model_context_length() for
+        # aux models would miss the per-model context_length override and
+        # fall through to the endpoint probe / DEFAULT_FALLBACK_CONTEXT.
+        self._custom_providers = _custom_providers
+
         # Check custom_providers per-model context_length
         if _config_context_length is None and _custom_providers:
             try:
@@ -3233,6 +3240,13 @@ class AIAgent:
                 # provider-specific paths (e.g. Bedrock static table, OpenRouter API)
                 # are invoked for the correct client, not inherited from the main model.
                 provider=(_aux_cfg_provider if _aux_cfg_provider and _aux_cfg_provider != "auto" else getattr(self, "provider", "")),
+                # Thread custom_providers so per-model context_length overrides
+                # configured in config.yaml apply to the aux model too.
+                # Without this the aux resolution misses step 0 of the
+                # context-length resolver and falls through to the endpoint
+                # probe, which for kiro-gateway/v1/models returns no
+                # context_length info and ends in DEFAULT_FALLBACK_CONTEXT (256K).
+                custom_providers=getattr(self, "_custom_providers", None),
             )
 
             # Hard floor: the auxiliary compression model must have at least
