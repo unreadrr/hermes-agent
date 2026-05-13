@@ -2329,6 +2329,12 @@ class AIAgent:
                 config_context_length=_config_context_length,
                 provider=self.provider,
                 api_mode=self.api_mode,
+                # personal: pass custom_providers so per-model context_length
+                # overrides in config.yaml (e.g. 1M context for opus-4.7 under
+                # a KiroGateway custom provider) reach the compressor. Without
+                # this, compressor falls back to the 200K default and triggers
+                # premature preflight compression at 100K on a 1M model.
+                custom_providers=_custom_providers,
             )
         self.compression_enabled = compression_enabled
 

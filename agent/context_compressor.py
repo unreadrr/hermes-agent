@@ -415,6 +415,7 @@ class ContextCompressor(ContextEngine):
         config_context_length: int | None = None,
         provider: str = "",
         api_mode: str = "",
+        custom_providers: list | None = None,
     ):
         self.model = model
         self.base_url = base_url
@@ -431,10 +432,16 @@ class ContextCompressor(ContextEngine):
         self.summary_target_ratio = max(0.10, min(summary_target_ratio, 0.95))
         self.quiet_mode = quiet_mode
 
+        # personal: pass custom_providers so per-model context_length overrides
+        # in config.yaml's custom_providers section (e.g. 1M context for opus-4.7
+        # behind a KiroGateway custom provider) win over the 200K default fallback.
+        # Without this, the agent silently uses the upstream-default context_length
+        # for the base model name even when config.yaml explicitly raises it.
         self.context_length = get_model_context_length(
             model, base_url=base_url, api_key=api_key,
             config_context_length=config_context_length,
             provider=provider,
+            custom_providers=custom_providers,
         )
         # Floor: never compress below MINIMUM_CONTEXT_LENGTH tokens even if
         # the percentage would suggest a lower value.  This prevents premature
