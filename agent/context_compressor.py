@@ -967,7 +967,11 @@ The user has requested that this compaction PRIORITISE preserving all informatio
             # corrupting context (session 40dad9 hit this May 13).
             # If validation fails, raise to trigger the main-model-fallback
             # retry logic in the exception handler below.
+            # Extended after May 13 incident — added patterns observed
+            # in real Kiro 200-OK failures + handoff-style "empty context"
+            # responses that occur when aux model gets the wrong context_length.
             _provider_error_patterns = (
+                # Direct provider error messages (Kiro, Anthropic, OpenAI).
                 "there's an issue with the selected model",
                 "i can't help with that",
                 "i cannot help",
@@ -979,10 +983,25 @@ The user has requested that this compaction PRIORITISE preserving all informatio
                 "account in cooldown",
                 "gateway timeout",
                 "service unavailable",
+                # Empty/handoff-style false summaries (the exact pattern
+                # session 40dad9 hit: "no user request visible in provided context").
+                "no user request",
+                "no user message",
+                "context unavailable",
+                "context window empty",
+                "compaction failed",
+                "unable to generate",
+                "i don't see any",
+                "i don't have access",
+                "empty conversation",
+                "no conversation history",
             )
             _stripped = summary.strip() if isinstance(summary, str) else ""
             _lower = _stripped.lower()
-            if len(_stripped) < 80:
+            # Lowered from 80 to 50 — real summaries are always > 200 chars,
+            # so 50 is a safer floor that won't flag legitimate but terse
+            # responses on tiny conversations.
+            if len(_stripped) < 50:
                 raise RuntimeError(
                     f"summary too short ({len(_stripped)} chars) — "
                     f"likely provider returned empty/truncated content. "
