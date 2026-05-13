@@ -3700,6 +3700,307 @@ def _compat_model(client: Any, model: Optional[str], cached_default: Optional[st
     return model or cached_default
 
 
+# ── _KIRO_STREAM_FORCE_HELPERS_v1 ─────────────────────────────────────────
+# KiroGateway returns 504 on non-streaming chat.completions when its
+# upstream accounts are in cooldown; the streaming endpoint blocks-and-
+# waits and returns normally.  Aux clients all use non-streaming (single
+# .create() call expecting a fully-aggregated response).
+#
+# The wrappers below intercept .chat.completions.create() and force
+# stream=True under the hood, then aggregate ChatCompletionChunk events
+# into a SimpleNamespace shaped like ChatCompletion.  They are applied in
+# _get_cached_client() only when the client's base_url is the local
+# KiroGateway endpoint (127.0.0.1:20129).
+#
+# _validate_llm_response accepts SimpleNamespace responses (see comment
+# referencing CodexAuxiliaryClient/AnthropicAuxiliaryClient), so no
+# additional plumbing is needed downstream.
+from types import SimpleNamespace as _StreamingAuxNS
+
+
+def _aggregate_stream_chunks(stream_iter, default_model: str):
+    """Consume an OpenAI ChatCompletionChunk iterator and build a
+    SimpleNamespace shaped like ChatCompletion.
+
+    Handles text content, tool_calls, finish_reason, usage, role.
+    """
+    content_parts = []
+    role = "assistant"
+    finish_reason = None
+    tool_calls_acc = {}
+    usage = None
+    response_id = ""
+    created_ts = 0
+    actual_model = default_model
+
+    for chunk in stream_iter:
+        if getattr(chunk, "id", None):
+            response_id = chunk.id
+        if getattr(chunk, "created", None):
+            created_ts = chunk.created
+        if getattr(chunk, "model", None):
+            actual_model = chunk.model
+        if getattr(chunk, "usage", None):
+            usage = chunk.usage
+        choices = getattr(chunk, "choices", None) or []
+        if not choices:
+            continue
+        choice = choices[0]
+        delta = getattr(choice, "delta", None)
+        if delta is not None:
+            if getattr(delta, "content", None):
+                content_parts.append(delta.content)
+            if getattr(delta, "role", None):
+                role = delta.role
+            delta_tcs = getattr(delta, "tool_calls", None) or []
+            for tc in delta_tcs:
+                idx = getattr(tc, "index", 0) or 0
+                if idx not in tool_calls_acc:
+                    tool_calls_acc[idx] = _StreamingAuxNS(
+                        id="",
+                        type="function",
+                        function=_StreamingAuxNS(name="", arguments=""),
+                    )
+                acc = tool_calls_acc[idx]
+                if getattr(tc, "id", None):
+                    acc.id = tc.id
+                if getattr(tc, "type", None):
+                    acc.type = tc.type
+                fn = getattr(tc, "function", None)
+                if fn is not None:
+                    if getattr(fn, "name", None):
+                        acc.function.name += fn.name
+                    if getattr(fn, "arguments", None):
+                        acc.function.arguments += fn.arguments
+        fr = getattr(choice, "finish_reason", None)
+        if fr:
+            finish_reason = fr
+
+    tool_calls = (
+        [tool_calls_acc[i] for i in sorted(tool_calls_acc)]
+        if tool_calls_acc
+        else None
+    )
+    message = _StreamingAuxNS(
+        content="".join(content_parts),
+        role=role,
+        tool_calls=tool_calls,
+        refusal=None,
+        function_call=None,
+    )
+    final_choice = _StreamingAuxNS(
+        index=0,
+        message=message,
+        finish_reason=finish_reason or "stop",
+        logprobs=None,
+    )
+    return _StreamingAuxNS(
+        id=response_id or "chatcmpl-streamforced",
+        choices=[final_choice],
+        created=created_ts or 0,
+        model=actual_model or default_model or "",
+        object="chat.completion",
+        usage=usage,
+        service_tier=None,
+        system_fingerprint=None,
+    )
+
+
+async def _aggregate_async_stream_chunks(stream_iter, default_model: str):
+    content_parts = []
+    role = "assistant"
+    finish_reason = None
+    tool_calls_acc = {}
+    usage = None
+    response_id = ""
+    created_ts = 0
+    actual_model = default_model
+
+    async for chunk in stream_iter:
+        if getattr(chunk, "id", None):
+            response_id = chunk.id
+        if getattr(chunk, "created", None):
+            created_ts = chunk.created
+        if getattr(chunk, "model", None):
+            actual_model = chunk.model
+        if getattr(chunk, "usage", None):
+            usage = chunk.usage
+        choices = getattr(chunk, "choices", None) or []
+        if not choices:
+            continue
+        choice = choices[0]
+        delta = getattr(choice, "delta", None)
+        if delta is not None:
+            if getattr(delta, "content", None):
+                content_parts.append(delta.content)
+            if getattr(delta, "role", None):
+                role = delta.role
+            delta_tcs = getattr(delta, "tool_calls", None) or []
+            for tc in delta_tcs:
+                idx = getattr(tc, "index", 0) or 0
+                if idx not in tool_calls_acc:
+                    tool_calls_acc[idx] = _StreamingAuxNS(
+                        id="",
+                        type="function",
+                        function=_StreamingAuxNS(name="", arguments=""),
+                    )
+                acc = tool_calls_acc[idx]
+                if getattr(tc, "id", None):
+                    acc.id = tc.id
+                if getattr(tc, "type", None):
+                    acc.type = tc.type
+                fn = getattr(tc, "function", None)
+                if fn is not None:
+                    if getattr(fn, "name", None):
+                        acc.function.name += fn.name
+                    if getattr(fn, "arguments", None):
+                        acc.function.arguments += fn.arguments
+        fr = getattr(choice, "finish_reason", None)
+        if fr:
+            finish_reason = fr
+
+    tool_calls = (
+        [tool_calls_acc[i] for i in sorted(tool_calls_acc)]
+        if tool_calls_acc
+        else None
+    )
+    message = _StreamingAuxNS(
+        content="".join(content_parts),
+        role=role,
+        tool_calls=tool_calls,
+        refusal=None,
+        function_call=None,
+    )
+    final_choice = _StreamingAuxNS(
+        index=0,
+        message=message,
+        finish_reason=finish_reason or "stop",
+        logprobs=None,
+    )
+    return _StreamingAuxNS(
+        id=response_id or "chatcmpl-streamforced",
+        choices=[final_choice],
+        created=created_ts or 0,
+        model=actual_model or default_model or "",
+        object="chat.completion",
+        usage=usage,
+        service_tier=None,
+        system_fingerprint=None,
+    )
+
+
+class _StreamForcingChatCompletions:
+    """Forwards everything to a real OpenAI chat.completions object except
+    .create(), which forces stream=True and returns an aggregated response."""
+
+    def __init__(self, real):
+        self._real = real
+
+    def create(self, **kwargs):
+        kwargs = dict(kwargs)
+        # Force streaming even if caller explicitly passed False.  Strip any
+        # stream_options the user may have included since we don't expose
+        # the stream to them.
+        kwargs["stream"] = True
+        kwargs.pop("stream_options", None)
+        model = kwargs.get("model", "") or ""
+        stream = self._real.create(**kwargs)
+        return _aggregate_stream_chunks(stream, model)
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
+class _StreamForcingChat:
+    def __init__(self, real_chat):
+        self._real = real_chat
+        self.completions = _StreamForcingChatCompletions(real_chat.completions)
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
+class _StreamForcingClient:
+    """Wraps an OpenAI client so all aux .chat.completions.create() calls
+    force stream=True under the hood.  Used for KiroGateway endpoints
+    where non-streaming returns 504 during upstream cooldowns."""
+
+    def __init__(self, real_client):
+        self._real = real_client
+        self.chat = _StreamForcingChat(real_client.chat)
+
+    @property
+    def base_url(self):
+        return getattr(self._real, "base_url", None)
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
+class _AsyncStreamForcingChatCompletions:
+    def __init__(self, real):
+        self._real = real
+
+    async def create(self, **kwargs):
+        kwargs = dict(kwargs)
+        kwargs["stream"] = True
+        kwargs.pop("stream_options", None)
+        model = kwargs.get("model", "") or ""
+        stream = await self._real.create(**kwargs)
+        return await _aggregate_async_stream_chunks(stream, model)
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
+class _AsyncStreamForcingChat:
+    def __init__(self, real_chat):
+        self._real = real_chat
+        self.completions = _AsyncStreamForcingChatCompletions(real_chat.completions)
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
+class _AsyncStreamForcingClient:
+    def __init__(self, real_client):
+        self._real = real_client
+        self.chat = _AsyncStreamForcingChat(real_client.chat)
+
+    @property
+    def base_url(self):
+        return getattr(self._real, "base_url", None)
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
+def _should_force_stream(client) -> bool:
+    """Returns True iff client's base_url is the local KiroGateway endpoint."""
+    if client is None:
+        return False
+    if isinstance(client, (_StreamForcingClient, _AsyncStreamForcingClient)):
+        return False  # already wrapped
+    try:
+        base_url = str(getattr(client, "base_url", "") or "")
+    except Exception:
+        return False
+    return "127.0.0.1:20129" in base_url or "localhost:20129" in base_url
+
+
+def _maybe_force_stream(client, async_mode: bool):
+    """If client targets KiroGateway, wrap it so aux .create() calls
+    force stream=True and aggregate chunks.  Else return client as-is."""
+    if not _should_force_stream(client):
+        return client
+    return (
+        _AsyncStreamForcingClient(client) if async_mode else _StreamForcingClient(client)
+    )
+
+
+# ── end _KIRO_STREAM_FORCE_HELPERS_v1 ────────────────────────────────────────
+
+
 def _get_cached_client(
     provider: str,
     model: str = None,
@@ -3794,6 +4095,9 @@ def _get_cached_client(
                 _client_cache[cache_key] = (client, default_model, bound_loop)
             else:
                 client, default_model, _ = _client_cache[cache_key]
+    # Force stream=True on KiroGateway aux clients (non-stream returns 504
+    # during upstream cooldowns; see _KIRO_STREAM_FORCE_HELPERS_v1 block above).
+    client = _maybe_force_stream(client, async_mode)
     return client, model or default_model
 
 
@@ -4187,6 +4491,10 @@ def call_llm(
                 f"No LLM provider configured for task={task} provider={resolved_provider}. "
                 f"Run: hermes setup")
 
+    # _KIRO_STREAM_FORCE_WRAP_INSIDE_CALL_LLM_v1: force stream=True on KiroGateway aux clients regardless of
+    # whether they came from _get_cached_client() or resolve_vision_provider_client().
+    # _maybe_force_stream is a no-op for non-KiroGateway clients and idempotent.
+    client = _maybe_force_stream(client, async_mode=False)
     effective_timeout = timeout if timeout is not None else _get_task_timeout(task)
 
     # Log what we're about to do — makes auxiliary operations visible
@@ -4551,6 +4859,10 @@ async def async_call_llm(
                 f"No LLM provider configured for task={task} provider={resolved_provider}. "
                 f"Run: hermes setup")
 
+    # _KIRO_STREAM_FORCE_WRAP_INSIDE_CALL_LLM_v1: force stream=True on KiroGateway aux clients regardless of
+    # whether they came from _get_cached_client() or resolve_vision_provider_client().
+    # _maybe_force_stream is a no-op for non-KiroGateway clients and idempotent.
+    client = _maybe_force_stream(client, async_mode=True)
     effective_timeout = timeout if timeout is not None else _get_task_timeout(task)
 
     # Pass the client's actual base_url (not just resolved_base_url) so
