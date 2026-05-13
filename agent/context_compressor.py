@@ -424,7 +424,11 @@ class ContextCompressor(ContextEngine):
         self.threshold_percent = threshold_percent
         self.protect_first_n = protect_first_n
         self.protect_last_n = protect_last_n
-        self.summary_target_ratio = max(0.10, min(summary_target_ratio, 0.80))
+        # personal: raise clamp from 0.80 → 0.95 to allow 90%+ tail retention
+        # when user explicitly sets compression.target_ratio high in config.yaml.
+        # Upstream clamps at 0.80 which gives ~41% post-compression on 1M models;
+        # 0.95 gives ~48%, combined with threshold=500K for Opus 4.7 = ~47% final.
+        self.summary_target_ratio = max(0.10, min(summary_target_ratio, 0.95))
         self.quiet_mode = quiet_mode
 
         self.context_length = get_model_context_length(
@@ -956,6 +960,40 @@ The user has requested that this compaction PRIORITISE preserving all informatio
             # Redact the summary output as well — the summarizer LLM may
             # ignore prompt instructions and echo back secrets verbatim.
             summary = redact_sensitive_text(content.strip())
+            # personal: validate summary before accepting it — KiroGateway and
+            # similar providers sometimes return empty / error-like content with
+            # 200 OK (account cooldowns, quota, weird model behavior). Without
+            # this check, an empty/mangled body becomes the "summary", silently
+            # corrupting context (session 40dad9 hit this May 13).
+            # If validation fails, raise to trigger the main-model-fallback
+            # retry logic in the exception handler below.
+            _provider_error_patterns = (
+                "there's an issue with the selected model",
+                "i can't help with that",
+                "i cannot help",
+                "i'm unable to help",
+                "no available accounts",
+                "rate limit",
+                "quota exceeded",
+                "model is overloaded",
+                "account in cooldown",
+                "gateway timeout",
+                "service unavailable",
+            )
+            _stripped = summary.strip() if isinstance(summary, str) else ""
+            _lower = _stripped.lower()
+            if len(_stripped) < 80:
+                raise RuntimeError(
+                    f"summary too short ({len(_stripped)} chars) — "
+                    f"likely provider returned empty/truncated content. "
+                    f"preview={_stripped[:120]!r}"
+                )
+            for _pat in _provider_error_patterns:
+                if _pat in _lower:
+                    raise RuntimeError(
+                        f"summary matches provider-error pattern {_pat!r} — "
+                        f"rejecting. preview={_stripped[:200]!r}"
+                    )
             # Store for iterative updates on next compaction
             self._previous_summary = summary
             self._summary_failure_cooldown_until = 0.0
