@@ -1613,6 +1613,26 @@ The user has requested that this compaction PRIORITISE preserving all informatio
         compress_end = self._find_tail_cut_by_tokens(messages, compress_start)
 
         if compress_start >= compress_end:
+            # personal: tail-cut found no middle region to summarize.  This
+            # used to silently return messages unchanged WITHOUT updating
+            # _ineffective_compression_count, which let preflight retrigger
+            # on every subsequent turn — burning auxiliary tokens on
+            # an infinite no-op compression loop (~519k tokens / 686 msgs
+            # / 15s each, observed in agent.log).  Mark this attempt as
+            # 100% ineffective so should_compress() backs off after the
+            # second consecutive miss.  See log:
+            #   "context compression done: messages=686->686 tokens=~519,474"
+            self._last_compression_savings_pct = 0.0
+            self._ineffective_compression_count += 1
+            if not self.quiet_mode:
+                logger.warning(
+                    "Compression early-return: tail-cut found no middle to "
+                    "compress (compress_start=%d >= compress_end=%d). "
+                    "Marking ineffective to prevent retrigger loop. "
+                    "ineffective_count=%d",
+                    compress_start, compress_end,
+                    self._ineffective_compression_count,
+                )
             return messages
 
         turns_to_summarize = messages[compress_start:compress_end]
