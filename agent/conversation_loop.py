@@ -365,13 +365,29 @@ def run_conversation(
         and len(messages) > agent.context_compressor.protect_first_n
                             + agent.context_compressor.protect_last_n + 1
     ):
-        # Include tool schema tokens — with many tools these can add
-        # 20-30K+ tokens that the old sys+msg estimate missed entirely.
-        _preflight_tokens = estimate_request_tokens_rough(
-            messages,
-            system_prompt=active_system_prompt or "",
-            tools=agent.tools or None,
-        )
+        # personal: prefer the REAL prompt-token count from the last API
+        # response over the rough str-len/4 estimate.  The rough estimate
+        # systematically overcounts by 3-6x on sessions with many tool
+        # calls because JSON escapes, base64 image data, and tool schemas
+        # all inflate `len(str(messages))` far beyond what the provider
+        # tokenizer actually emits.  Operator observation:
+        #   UI shows 101k (provider usage.input_tokens)
+        #   backend rough says 615k → preflight triggers at 180k threshold
+        #   → infinite no-op compression loop when real context is fine.
+        # last_prompt_tokens is set by update_from_response() on every API
+        # call, so it's available after turn 1.  On turn 0 we still need
+        # the rough estimate.
+        _real_prompt = getattr(agent.context_compressor, "last_prompt_tokens", 0) or 0
+        if _real_prompt > 0:
+            _preflight_tokens = _real_prompt
+        else:
+            # Include tool schema tokens — with many tools these can add
+            # 20-30K+ tokens that the old sys+msg estimate missed entirely.
+            _preflight_tokens = estimate_request_tokens_rough(
+                messages,
+                system_prompt=active_system_prompt or "",
+                tools=agent.tools or None,
+            )
 
         if _preflight_tokens >= agent.context_compressor.threshold_tokens:
             logger.info(
