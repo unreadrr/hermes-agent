@@ -1,0 +1,5 @@
+name: fireworks-provider
+kind: model-provider
+version: 1.0.0
+description: Fireworks AI (hosted open models — GLM-5.1, DeepSeek V4, Kimi K2, gpt-oss, …)
+author: Nous Research
