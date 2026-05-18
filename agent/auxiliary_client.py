@@ -4137,12 +4137,8 @@ class _AsyncStreamForcingChatCompletions:
         kwargs["stream"] = True
         kwargs.pop("stream_options", None)
         model = kwargs.get("model", "") or ""
-        logger.info("[KIRO_STREAM_TRACE] async wrapper .create() model=%s", model)
-        import time as _t; _t0 = _t.time()
         stream = await self._real.create(**kwargs)
-        logger.info("[KIRO_STREAM_TRACE] async stream obj got in %.1fs, aggregating", _t.time()-_t0)
         result = await _aggregate_async_stream_chunks(stream, model)
-        logger.info("[KIRO_STREAM_TRACE] async aggregated total %.1fs", _t.time()-_t0)
         return result
 
     def __getattr__(self, name):
@@ -4190,8 +4186,6 @@ def _maybe_force_stream(client, async_mode: bool):
     should = _should_force_stream(client)
     base = str(getattr(client, "base_url", "") or "")
     cls = type(client).__name__
-    logger.info("[KIRO_STREAM_TRACE] _maybe_force_stream: async=%s should=%s base=%r cls=%s",
-                async_mode, should, base, cls)
     if not should:
         return client
     return (
@@ -5097,13 +5091,11 @@ async def async_call_llm(
 
     Same as call_llm() but async. See call_llm() for full documentation.
     """
-    logger.info("[KIRO_STREAM_TRACE] async_call_llm ENTERED task=%s", task)
     resolved_provider, resolved_model, resolved_base_url, resolved_api_key, resolved_api_mode = _resolve_task_provider_model(
         task, provider, model, base_url, api_key)
     effective_extra_body = _get_task_extra_body(task)
     effective_extra_body.update(extra_body or {})
 
-    logger.info("[KIRO_STREAM_TRACE] vision branch in async hit")
     if task == "vision":
         effective_provider, client, final_model = resolve_vision_provider_client(
             provider=resolved_provider if resolved_provider != "auto" else provider,
