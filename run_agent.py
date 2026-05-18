@@ -1720,6 +1720,18 @@ class AIAgent:
         if not text or not text.strip():
             return False
         cleaned = text.strip()
+        # personal: cross-session steer leak guard.  If somehow the
+        # pending-steer machinery delivers a cancel-marker text (observed
+        # 2026-05-18 — a background skill-curator session cancelled and
+        # its "Task cancelled..." marker reached an unrelated session's
+        # next tool boundary), silently drop it.  Cancel markers must
+        # NEVER be steerable as user input regardless of which session
+        # produced them.  Patterns mirror api/streaming.py:_CANCEL_MARKER_PATTERNS.
+        _lower = cleaned.lower()
+        if any(p in _lower for p in (
+            'task cancelled', 'task canceled', 'response interrupted',
+        )):
+            return False
         _lock = getattr(self, "_pending_steer_lock", None)
         if _lock is None:
             # Test stubs that built AIAgent via object.__new__ skip __init__.
